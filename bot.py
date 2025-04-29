@@ -1,115 +1,164 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
-from time import sleep
+import os
 import logging
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, filters,
+    ContextTypes, ConversationHandler, CallbackContext
+)
+from datetime import timedelta
 
-TOKEN = 'YOUR_BOT_TOKEN'
-ADMIN_ID = 6387942633  
+# اطلاعات ربات
+TOKEN = '7413532622:AAFfd_ctt4Xb055CqQxct64anIUTHhagW4M'
+CHANNEL_USERNAME = '@hottof'
+CHANNEL_USERNAME_SECONDARY = '@tofhot'
+ADMINS = [6378124502, 6387942633, 5459406429, 7189616405]
 
-VIDEO_STATE = 1
-COVER_STATE = 2
-CAPTION_STATE = 3
-SEND_STATE = 4
+# مراحل گفتگو
+WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE = range(4)
 
-user_data = {}
+# لاگ
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(name)
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
-logger = logging.getLogger(__name__)
+# تعریف ربات
+application = Application.builder().token(TOKEN).build()
 
-def check_channel_membership(user_id):
-    return True  
+# دستورات ربات
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text('شما دسترسی به این ربات ندارید.')
+        return ConversationHandler.END
+    await update.message.reply_text('سلام! لطفاً یک عکس یا ویدیو فوروارد کن.')
+    return WAITING_FOR_MEDIA
 
-def start(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
-    if user_id == ADMIN_ID:
-        start_admin_panel(update, context)
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        return ConversationHandler.END
+
+    if update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        media_type = 'photo'
+    elif update.message.video:
+        file_id = update.message.video.file_id
+        media_type = 'video'
     else:
-        update.message.reply_text("شما دسترسی به پنل ادمین ندارید.")
+        await update.message.reply_text('فقط عکس یا ویدیو قابل قبول است.')
+        return WAITING_FOR_MEDIA
 
-def start_admin_panel(update, context):
-    keyboard = [
-        [InlineKeyboardButton("سوپر", callback_data='video')],
-        [InlineKeyboardButton("پست", callback_data='post')],
-        [InlineKeyboardButton("آمار", callback_data='statistics')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text('خوش آمدید، لطفا یک گزینه را انتخاب کنید:', reply_markup=reply_markup)
+    context.user_data['file_id'] = file_id
+    context.user_data['media_type'] = media_type
 
-def handle_video(update, context):
-    user_id = update.message.from_user.id
-    user_data[user_id] = {"state": VIDEO_STATE}
-    update.message.reply_text("لطفا ویدیو را ارسال کنید.")
+    await update.message.reply_text('لطفاً کپشن مورد نظر خود را بنویسید:')
+    return WAITING_FOR_CAPTION
 
-def handle_cover(update, context):
-    user_id = update.message.from_user.id
-    if user_data.get(user_id, {}).get("state") == VIDEO_STATE:
-        user_data[user_id]["state"] = COVER_STATE
-        user_data[user_id]["video"] = update.message.video.file_id
-        update.message.reply_text("لطفا کاور را ارسال کنید.")
+async def handle_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    caption = update.message.text
+    final_caption = caption + "\n\n@hottof | تُفِ داغ"
+    context.user_data['caption'] = final_caption
 
-def handle_caption(update, context):
-    user_id = update.message.from_user.id
-    if user_data.get(user_id, {}).get("state") == COVER_STATE:
-        user_data[user_id]["state"] = CAPTION_STATE
-        user_data[user_id]["cover"] = update.message.photo[-1].file_id  
-        update.message.reply_text("لطفا کپشن را ارسال کنید.")
+    keyboard = ReplyKeyboardMarkup(
+        [['ارسال در کانال', 'ارسال در آینده'], ['برگشت به ابتدا']],
+        resize_keyboard=True
+    )
 
-def handle_send(update, context):
-    user_id = update.message.from_user.id
-    if user_data.get(user_id, {}).get("state") == CAPTION_STATE:
-        user_data[user_id]["state"] = SEND_STATE
-        user_data[user_id]["caption"] = update.message.text
-        video = user_data[user_id]["video"]
-        cover = user_data[user_id]["cover"]
-        caption = user_data[user_id]["caption"]
-        
-        video_link = "https://your_video_link"  
-        keyboard = [
-            [InlineKeyboardButton("مشاهده", url=video_link)],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        update.message.reply_text(f"ویدیو آماده است:\n{caption}\n\n@hottof | تُفِ داغ", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-        
-        update.message.reply_text("ویدیو به کانال @hottof ارسال شد!")
+    media_type = context.user_data['media_type']
+    file_id = context.user_data['file_id']
 
-        if check_channel_membership(user_id):
-            update.message.reply_text("شما عضو کانال‌های مورد نظر هستید. ویدیو به شما ارسال می‌شود.")
-            update.message.reply_video(video)
-            sleep(30)  
-            update.message.delete()
-            update.message.reply_text("ویدیو پس از 30 ثانیه پاک شد.")
-        else:
-            update.message.reply_text("شما عضو کانال‌های @hottof یا @tofhot نیستید. لطفا عضو شوید.")
-        del user_data[user_id]
+    if media_type == 'photo':
+        await update.message.reply_photo(file_id, caption=final_caption, reply_markup=keyboard)
+    elif media_type == 'video':
+        await update.message.reply_video(file_id, caption=final_caption, reply_markup=keyboard)
 
-def handle_post(update, context):
-    update.message.reply_text("لطفا پیام فوروارد شده را ارسال کنید.")
-    sleep(2)  
-    update.message.reply_text("پست ارسال شد!\nکپشن: این یک نمونه پست است.\n\n@hottof | تُفِ داغ", parse_mode=ParseMode.MARKDOWN)
-    update.message.reply_text("پست به کانال @hottof ارسال شد!")
+    return WAITING_FOR_ACTION
 
-def show_statistics(update, context):
-    update.message.reply_text("آمار ربات:\nساعت گذشته: 10 نفر\nروز گذشته: 100 نفر\nهفته گذشته: 500 نفر\nماه گذشته: 2000 نفر")
+async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-def error(update: Update, context: CallbackContext):
-    logger.warning(f"Update {update} caused error {context.error}")
+    if text == 'ارسال در کانال':
+        # بررسی عضویت در کانال ها
+        user = update.effective_user
+        member_of_first_channel = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+        member_of_second_channel = await context.bot.get_chat_member(CHANNEL_USERNAME_SECONDARY, user.id)
 
+        if member_of_first_channel.status not in ['member', 'administrator'] and \
+           member_of_second_channel.status not in ['member', 'administrator']:
+            await update.message.reply_text(
+                f'برای مشاهده و دریافت فایل باید به یکی از کانال‌های {CHANNEL_USERNAME} یا {CHANNEL_USERNAME_SECONDARY} بپیوندید.'
+            )
+            return WAITING_FOR_MEDIA
+
+        await send_to_channel(context)
+        await update.message.reply_text('پیام ارسال شد. لطفاً مدیا بعدی را بفرستید.', reply_markup=ReplyKeyboardRemove())
+        return WAITING_FOR_MEDIA
+    elif text == 'ارسال در آینده':
+        await update.message.reply_text('زمان ارسال (به دقیقه) را وارد کنید:', reply_markup=ReplyKeyboardRemove())
+        return WAITING_FOR_SCHEDULE
+    elif text == 'برگشت به ابتدا':
+        await update.message.reply_text('لغو شد. لطفاً دوباره مدیا بفرستید.', reply_markup=ReplyKeyboardRemove())
+        return WAITING_FOR_MEDIA
+    else:
+        await update.message.reply_text('یکی از گزینه‌ها را انتخاب کنید.')
+        return WAITING_FOR_ACTION
+
+async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        minutes = int(update.message.text)
+        context.job_queue.run_once(send_scheduled, when=timedelta(minutes=minutes), data=context.user_data.copy())
+        await update.message.reply_text(f'پیام برای {minutes} دقیقه بعد زمان‌بندی شد.', reply_markup=ReplyKeyboardRemove())
+        return WAITING_FOR_MEDIA
+    except ValueError:
+        await update.message.reply_text('فقط عدد وارد کنید.')
+        return WAITING_FOR_SCHEDULE
+
+async def send_to_channel(context: ContextTypes.DEFAULT_TYPE):
+    data = context.user_data
+    media_type = data['media_type']
+    file_id = data['file_id']
+    caption = data['caption']
+
+    if media_type == 'photo':
+        await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_id, caption=caption)
+    elif media_type == 'video':
+        await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=file_id, caption=caption)
+
+async def send_scheduled(context: CallbackContext):
+    data = context.job.data
+    media_type = data['media_type']
+    file_id = data['file_id']
+    caption = data['caption']
+
+    bot = context.bot
+    if media_type == 'photo':
+        await bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_id, caption=caption)
+    elif media_type == 'video':
+        await bot.send_video(chat_id=CHANNEL_USERNAME, video=file_id, caption=caption)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('لغو شد.', reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+# اجرای اصلی
 def main():
-    updater = Updater(TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            WAITING_FOR_MEDIA: [MessageHandler(filters.PHOTO | filters.VIDEO, handle_media)],
+            WAITING_FOR_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_caption)],
+            WAITING_FOR_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_action)],
+            WAITING_FOR_SCHEDULE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_schedule)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
 
-    dispatcher.add_handler(CommandHandler('start', start))
-    dispatcher.add_handler(CallbackQueryHandler(handle_video, pattern='^video$'))
-    dispatcher.add_handler(CallbackQueryHandler(handle_post, pattern='^post$'))
-    dispatcher.add_handler(CallbackQueryHandler(show_statistics, pattern='^statistics$'))
-    dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
-    dispatcher.add_handler(MessageHandler(Filters.photo, handle_cover))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_caption))
-    dispatcher.add_error_handler(error)
+    application.add_handler(conv_handler)
 
-    updater.start_polling()
-    updater.idle()
+    WEBHOOK_URL = 'https://ooooo-fiwm.onrender.com/'  # اصلاح شده
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),  # اصلاح شده
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == '__main__':
     main()
