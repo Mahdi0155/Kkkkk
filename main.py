@@ -21,6 +21,11 @@ WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [['۱ سوپر', '۲ پست', '۳ آمار']]
+    await update.message.reply_text('به پنل خوش آمدید.', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return WAITING_FOR_MEDIA
+
 async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     args = context.args
@@ -49,10 +54,6 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text('برای دریافت فایل، در یکی از کانال‌ها عضو شوید:', reply_markup=markup)
     else:
         await send_and_delete(file_id, update, context)
-
-    keyboard = [['۱ سوپر', '۲ پست', '۳ آمار']]
-    await update.message.reply_text('به پنل خوش آمدید.', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-    return WAITING_FOR_MEDIA
 
 async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from database import get_active_user_counts
@@ -151,26 +152,6 @@ async def check_membership(user_id: int, bot) -> list:
         if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
             not_joined.append(ch)
     return not_joined
-
-async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from database import add_user
-    args = context.args
-    if not args:
-        await update.message.reply_text('برای استفاده از ربات روی لینک "مشاهده" در پست کلیک کنید.')
-        return
-    file_id = args[0]
-    add_user(update.effective_user.id)
-    not_joined = await check_membership(update.effective_user.id, context.bot)
-    if not_joined:
-        buttons = [
-            [InlineKeyboardButton("تُفِ داغ", url=f'https://t.me/{CHANNEL_USERNAME[1:]}')],
-            [InlineKeyboardButton("زاپاس تف", url=f'https://t.me/{CHANNEL_USERNAME_SECONDARY[1:]}')],
-            [InlineKeyboardButton("عضو شدم", callback_data=f"check_{file_id}")]
-        ]
-        markup = InlineKeyboardMarkup(buttons)
-        await update.message.reply_text('برای دریافت فایل، در یکی از کانال‌ها عضو شوید:', reply_markup=markup)
-    else:
-        await send_and_delete(file_id, update, context)
 
 async def handle_check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
