@@ -224,7 +224,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(سوپر)$'), super_post)],
+        entry_points=[MessageHandler(filters.Regex('^(سوپر)$'), handle_panel_choice)],
         states={
             1: [MessageHandler(filters.VIDEO, super_get_video)],
             2: [MessageHandler(filters.PHOTO, super_get_cover)],
