@@ -8,12 +8,12 @@ from telegram.ext import (
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-TOKEN = 'توکن_ربات_تو'
+TOKEN = '7413532622:AAFfd_ctt4Xb055CqQxct64anIUTHhagW4M'
 CHANNEL_USERNAME = '@hottof'
 CHANNEL_NAME = 'تُفِ داغ'
 CHANNEL_USERNAME_SECONDARY = '@tofhot'
 CHANNEL_NAME_SECONDARY = 'زاپاس تف'
-ADMINS = [111111111, 222222222]
+ADMINS = [6387942633]
 
 WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE = range(4)
 user_stats = defaultdict(list)
