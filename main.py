@@ -19,33 +19,36 @@ CHANNEL_NAME_SECONDARY = 'زاپاس تف'
 ADMINS = [6387942633]
 
 WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE = range(4)
-user_stats = defaultdict(list)
-file_counter = {'count': 0}
-stats = defaultdict(list)
-DATA_FILE = Path("data.json")
+
+# مسیر فایل دیتا
+DATA_FILE = "data.json"
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({"files": {}, "file_count": 0, "user_stats": {}}, f, ensure_ascii=False, indent=2)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+data_store = load_data()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def load_data():
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r") as f:
-            data = json.load(f)
-            user_stats.update({int(k): [datetime.fromisoformat(t) for t in v] for k, v in data.get("user_stats", {}).items()})
-            file_counter["count"] = data.get("file_count", 0)
-
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump({
-            "user_stats": {str(k): [t.isoformat() for t in v] for k, v in user_stats.items()},
-            "file_count": file_counter["count"]
-        }, f)
-
 # شروع ربات
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_stats[user_id].append(datetime.now())
-    save_data()
+    now = datetime.now().isoformat()
+    user_id_str = str(user_id)
+    if user_id_str not in data_store["user_stats"]:
+        data_store["user_stats"][user_id_str] = []
+    data_store["user_stats"][user_id_str].append(now)
+    save_data(data_store)
+
     if user_id not in ADMINS:
         await update.message.reply_text('به ربات خوش آمدید.')
         return ConversationHandler.END
@@ -65,18 +68,20 @@ async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         return WAITING_FOR_CAPTION
     elif text == '۳ آمار':
         now = datetime.now()
-        one_hour = sum(1 for u in user_stats if any((now - t).total_seconds() <= 3600 for t in user_stats[u]))
-        one_day = sum(1 for u in user_stats if any((now - t).total_seconds() <= 86400 for t in user_stats[u]))
-        one_week = sum(1 for u in user_stats if any((now - t).total_seconds() <= 604800 for t in user_stats[u]))
-        one_month = sum(1 for u in user_stats if any((now - t).total_seconds() <= 2592000 for t in user_stats[u]))
+        all_users = data_store["user_stats"]
+        timestamps = lambda u: [datetime.fromisoformat(t) for t in all_users.get(u, [])]
+        one_hour = sum(1 for u in all_users if any((now - t).total_seconds() <= 3600 for t in timestamps(u)))
+        one_day = sum(1 for u in all_users if any((now - t).total_seconds() <= 86400 for t in timestamps(u)))
+        one_week = sum(1 for u in all_users if any((now - t).total_seconds() <= 604800 for t in timestamps(u)))
+        one_month = sum(1 for u in all_users if any((now - t).total_seconds() <= 2592000 for t in timestamps(u)))
         await update.message.reply_text(
             f'🤖 آمار شما در ساعت {now.strftime("%H:%M:%S")} و تاریخ {now.strftime("%Y/%m/%d")} به این صورت می‌باشد\n\n'
-            f'👥 تعداد اعضا : {len(user_stats)}\n'
+            f'👥 تعداد اعضا : {len(all_users)}\n'
             f'🕒 کاربران ساعت گذشته : {one_hour}\n'
             f'☪️ کاربران ۲۴ ساعت گذشته : {one_day}\n'
             f'7️⃣ کاربران هفته گذشته : {one_week}\n'
             f'🌛 کاربران ماه گذشته : {one_month}\n'
-            f'🗂 تعداد فایل‌ها : {file_counter["count"]}'
+            f'🗂 تعداد فایل‌ها : {data_store["file_count"]}'
         )
         return WAITING_FOR_MEDIA
     return WAITING_FOR_MEDIA
@@ -139,15 +144,19 @@ async def handle_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_to_channel(context):
     data = context.user_data
+    file_id = data['video']
+    now = datetime.now().isoformat()
+
+    # ذخیره فایل
+    if file_id not in data_store["files"]:
+        data_store["files"][file_id] = {"requests": 0, "added": now}
+        data_store["file_count"] += 1
+    save_data(data_store)
+
     await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
-    file_counter['count'] += 1
-    save_data()
 
 async def send_to_channel_job(context: CallbackContext):
-    data = context.job.data
-    await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
-    file_counter['count'] += 1
-    save_data()
+    await send_to_channel(context)
 
 async def check_membership(user_id: int, bot) -> list:
     not_joined = []
@@ -192,6 +201,22 @@ async def send_and_delete(file_id: str, update: Update | CallbackQuery, context:
     user_id = update.effective_user.id
     message = await context.bot.send_video(chat_id=user_id, video=file_id)
     await context.bot.send_message(chat_id=user_id, text='این پیام پس از ۳۰ ثانیه حذف می‌شود.')
+
+    # ثبت درخواست فایل
+    file_id = file_id.strip()
+    now = datetime.now().isoformat()
+    if file_id in data_store["files"]:
+        data_store["files"][file_id]["requests"] += 1
+    else:
+        data_store["files"][file_id] = {"requests": 1, "added": now}
+        data_store["file_count"] += 1
+
+    user_id_str = str(user_id)
+    if user_id_str not in data_store["user_stats"]:
+        data_store["user_stats"][user_id_str] = []
+    data_store["user_stats"][user_id_str].append(now)
+    save_data(data_store)
+
     context.job_queue.run_once(delete_msg, 30, data={'chat_id': user_id, 'msg_id': message.message_id})
 
 async def delete_msg(context: CallbackContext):
@@ -199,7 +224,6 @@ async def delete_msg(context: CallbackContext):
     await context.bot.delete_message(chat_id=data['chat_id'], message_id=data['msg_id'])
 
 def main():
-    load_data()
     app = Application.builder().token(TOKEN).build()
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT, handle_panel_choice)],
