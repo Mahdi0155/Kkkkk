@@ -21,7 +21,6 @@ WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# شروع ربات
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     now = datetime.now()
@@ -35,7 +34,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('به پنل خوش آمدید.', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return WAITING_FOR_MEDIA
 
-# انتخاب پنل مدیریت
 async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from database import get_active_user_counts
     text = update.message.text
@@ -195,15 +193,14 @@ def main():
         fallbacks=[CommandHandler('cancel', start)]
     )
 
-    app.add_handler(conv)
     app.add_handler(CommandHandler("start", handle_start_command))
     app.add_handler(CallbackQueryHandler(handle_check_membership, pattern=r"^check_"))
-    app.add_handler(MessageHandler(filters.TEXT, start))
+    app.add_handler(conv)
 
     app.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.environ.get("PORT", 8080)),
-    webhook_url="https://kkkkk-mkfn.onrender.com/webhook"
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),
+        webhook_url="https://kkkkk-mkfn.onrender.com/webhook"
     )
 
 if __name__ == '__main__':
