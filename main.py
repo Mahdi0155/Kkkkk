@@ -204,7 +204,6 @@ def main():
     listen="0.0.0.0",
     port=int(os.environ.get("PORT", 8080)),
     webhook_url="https://kkkkk-mkfn.onrender.com/webhook",
-    path="/webhook"  # این خط مهمه
     )
 
 if __name__ == '__main__':
