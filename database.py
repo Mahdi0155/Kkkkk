@@ -1,7 +1,10 @@
 import sqlite3
+from datetime import datetime, timedelta
+
+DB_PATH = "bot.db"
 
 def init_db():
-    conn = sqlite3.connect("bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -14,50 +17,64 @@ def init_db():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS stats (
         user_id INTEGER,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        timestamp TEXT
     )
     """)
 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS scheduled_posts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_id TEXT,
-        media_type TEXT,
-        caption TEXT,
-        send_time TIMESTAMP
+    CREATE TABLE IF NOT EXISTS files (
+        file_id TEXT PRIMARY KEY,
+        requests INTEGER DEFAULT 0,
+        added TEXT
     )
     """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS file_count (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        count INTEGER DEFAULT 0
-    )
-    """)
-    cursor.execute("INSERT OR IGNORE INTO file_count (id, count) VALUES (1, 0)")
 
     conn.commit()
     conn.close()
 
 def add_user(user_id: int):
-    conn = sqlite3.connect("bot.db")
+    now = datetime.now().isoformat()
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    cursor.execute("INSERT INTO stats (user_id) VALUES (?)", (user_id,))
+    cursor.execute("INSERT INTO stats (user_id, timestamp) VALUES (?, ?)", (user_id, now))
     conn.commit()
     conn.close()
 
-def increase_file_count():
-    conn = sqlite3.connect("bot.db")
+def record_file_request(file_id: str):
+    now = datetime.now().isoformat()
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE file_count SET count = count + 1 WHERE id = 1")
+    cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
+    if cursor.fetchone():
+        cursor.execute("UPDATE files SET requests = requests + 1 WHERE file_id = ?", (file_id,))
+    else:
+        cursor.execute("INSERT INTO files (file_id, requests, added) VALUES (?, 1, ?)", (file_id, now))
     conn.commit()
     conn.close()
 
-def get_file_count():
-    conn = sqlite3.connect("bot.db")
+def get_stats():
+    now = datetime.now()
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT count FROM file_count WHERE id = 1")
-    count = cursor.fetchone()[0]
+    cursor.execute("SELECT DISTINCT user_id FROM stats")
+    all_users = [row[0] for row in cursor.fetchall()]
+
+    cursor.execute("SELECT user_id, timestamp FROM stats")
+    records = cursor.fetchall()
+    def count_in_period(seconds):
+        return len({u for u, t in records if (now - datetime.fromisoformat(t)).total_seconds() <= seconds})
+
+    stats = {
+        "total_users": len(all_users),
+        "hour": count_in_period(3600),
+        "day": count_in_period(86400),
+        "week": count_in_period(604800),
+        "month": count_in_period(2592000)
+    }
+
+    cursor.execute("SELECT COUNT(*) FROM files")
+    stats["file_count"] = cursor.fetchone()[0]
+
     conn.close()
-    return count
+    return stats
