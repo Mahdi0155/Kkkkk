@@ -41,7 +41,7 @@ def add_user(user_id: int):
     conn.commit()
     conn.close()
 
-def record_file_request(file_id: str):
+def increase_file_count(file_id: str):
     now = datetime.now().isoformat()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -53,6 +53,30 @@ def record_file_request(file_id: str):
     conn.commit()
     conn.close()
 
+def get_file_count(file_id: str) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT requests FROM files WHERE file_id = ?", (file_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def increase_file_request(user_id: int):
+    now = datetime.now().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO stats (user_id, timestamp) VALUES (?, ?)", (user_id, now))
+    conn.commit()
+    conn.close()
+
+def file_exists(file_id: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM files WHERE file_id = ?", (file_id,))
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
+
 def get_stats():
     now = datetime.now()
     conn = sqlite3.connect(DB_PATH)
@@ -62,6 +86,7 @@ def get_stats():
 
     cursor.execute("SELECT user_id, timestamp FROM stats")
     records = cursor.fetchall()
+
     def count_in_period(seconds):
         return len({u for u, t in records if (now - datetime.fromisoformat(t)).total_seconds() <= seconds})
 
