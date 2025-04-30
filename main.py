@@ -22,14 +22,30 @@ WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE
 user_stats = defaultdict(list)
 file_counter = {'count': 0}
 stats = defaultdict(list)
+DATA_FILE = Path("data.json")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def load_data():
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+            user_stats.update({int(k): [datetime.fromisoformat(t) for t in v] for k, v in data.get("user_stats", {}).items()})
+            file_counter["count"] = data.get("file_count", 0)
+
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump({
+            "user_stats": {str(k): [t.isoformat() for t in v] for k, v in user_stats.items()},
+            "file_count": file_counter["count"]
+        }, f)
 
 # شروع ربات
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_stats[user_id].append(datetime.now())
+    save_data()
     if user_id not in ADMINS:
         await update.message.reply_text('به ربات خوش آمدید.')
         return ConversationHandler.END
@@ -125,11 +141,13 @@ async def send_to_channel(context):
     data = context.user_data
     await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
     file_counter['count'] += 1
+    save_data()
 
 async def send_to_channel_job(context: CallbackContext):
     data = context.job.data
     await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
     file_counter['count'] += 1
+    save_data()
 
 async def check_membership(user_id: int, bot) -> list:
     not_joined = []
@@ -181,6 +199,7 @@ async def delete_msg(context: CallbackContext):
     await context.bot.delete_message(chat_id=data['chat_id'], message_id=data['msg_id'])
 
 def main():
+    load_data()
     app = Application.builder().token(TOKEN).build()
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT, handle_panel_choice)],
@@ -200,10 +219,10 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, start))
 
     app.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.environ.get("PORT", 8080)),
-    webhook_path="/webhook",
-    webhook_url="https://kkkkk-mkfn.onrender.com/webhook"
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),
+        webhook_path="/webhook",
+        webhook_url="https://kkkkk-mkfn.onrender.com/webhook"
     )
 
 if __name__ == '__main__':
