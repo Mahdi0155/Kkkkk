@@ -1,53 +1,32 @@
-import json
-from pathlib import Path
 import os
 import logging
-from telegram import Update, CallbackQuery, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters,
-    ContextTypes, ConversationHandler, CallbackContext, CallbackQueryHandler
-)
 from datetime import datetime, timedelta
-from collections import defaultdict
+from telegram import (
+    Update, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove
+)
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, filters, CallbackContext,
+    ContextTypes, ConversationHandler, CallbackQueryHandler
+)
 from telegram.constants import ChatMemberStatus
+from database import init_db, add_user, get_stats, record_file_request
 
 TOKEN = '7413532622:AAFfd_ctt4Xb055CqQxct64anIUTHhagW4M'
 CHANNEL_USERNAME = '@hottof'
-CHANNEL_NAME = 'تُفِ داغ'
 CHANNEL_USERNAME_SECONDARY = '@tofhot'
-CHANNEL_NAME_SECONDARY = 'زاپاس تف'
 ADMINS = [6387942633]
 
 WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE = range(4)
 
-# مسیر فایل دیتا
-DATA_FILE = "data.json"
-
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"files": {}, "file_count": 0, "user_stats": {}}, f, ensure_ascii=False, indent=2)
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-data_store = load_data()
-
+# راه‌اندازی لاگ
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # شروع ربات
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    now = datetime.now().isoformat()
-    user_id_str = str(user_id)
-    if user_id_str not in data_store["user_stats"]:
-        data_store["user_stats"][user_id_str] = []
-    data_store["user_stats"][user_id_str].append(now)
-    save_data(data_store)
+    add_user(user_id)
 
     if user_id not in ADMINS:
         await update.message.reply_text('به ربات خوش آمدید.')
@@ -57,7 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('به پنل خوش آمدید.', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return WAITING_FOR_MEDIA
 
-# انتخاب پنل مدیریت
+# انتخاب از پنل
 async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == '۱ سوپر':
@@ -67,21 +46,16 @@ async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text('یک پیام فوروارد کن.')
         return WAITING_FOR_CAPTION
     elif text == '۳ آمار':
-        now = datetime.now()
-        all_users = data_store["user_stats"]
-        timestamps = lambda u: [datetime.fromisoformat(t) for t in all_users.get(u, [])]
-        one_hour = sum(1 for u in all_users if any((now - t).total_seconds() <= 3600 for t in timestamps(u)))
-        one_day = sum(1 for u in all_users if any((now - t).total_seconds() <= 86400 for t in timestamps(u)))
-        one_week = sum(1 for u in all_users if any((now - t).total_seconds() <= 604800 for t in timestamps(u)))
-        one_month = sum(1 for u in all_users if any((now - t).total_seconds() <= 2592000 for t in timestamps(u)))
+        stats = get_stats()
+        now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         await update.message.reply_text(
-            f'🤖 آمار شما در ساعت {now.strftime("%H:%M:%S")} و تاریخ {now.strftime("%Y/%m/%d")} به این صورت می‌باشد\n\n'
-            f'👥 تعداد اعضا : {len(all_users)}\n'
-            f'🕒 کاربران ساعت گذشته : {one_hour}\n'
-            f'☪️ کاربران ۲۴ ساعت گذشته : {one_day}\n'
-            f'7️⃣ کاربران هفته گذشته : {one_week}\n'
-            f'🌛 کاربران ماه گذشته : {one_month}\n'
-            f'🗂 تعداد فایل‌ها : {data_store["file_count"]}'
+            f'📊 آمار در {now}:\n\n'
+            f'👥 کاربران کل: {stats["total_users"]}\n'
+            f'🕐 فعال در ساعت: {stats["hour"]}\n'
+            f'📅 فعال ۲۴ساعت: {stats["day"]}\n'
+            f'🗓 فعال در هفته: {stats["week"]}\n'
+            f'🌙 فعال در ماه: {stats["month"]}\n'
+            f'🎞 تعداد فایل‌ها: {stats["file_count"]}'
         )
         return WAITING_FOR_MEDIA
     return WAITING_FOR_MEDIA
@@ -104,14 +78,11 @@ async def handle_cover(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['caption'] = update.message.text
-    file_id = context.user_data['video']
-    cover_id = context.user_data['cover']
-    caption = context.user_data['caption']
-    preview_caption = f'{caption}\n\n@hottof | تُفِ داغ'
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('مشاهده', url=f'https://t.me/{context.bot.username}?start={file_id}')]])
-    await update.message.reply_photo(cover_id, caption=preview_caption, reply_markup=keyboard)
-    context.user_data['preview_caption'] = preview_caption
+    caption = f"{context.user_data['caption']}\n\n@hottof | تُفِ داغ"
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("مشاهده", url=f"https://t.me/{context.bot.username}?start={context.user_data['video']}")]])
+    context.user_data['preview_caption'] = caption
     context.user_data['inline_keyboard'] = keyboard
+    await update.message.reply_photo(photo=context.user_data['cover'], caption=caption, reply_markup=keyboard)
     reply_keyboard = [['ارسال در کانال حالا', 'ارسال در آینده'], ['لغو', 'برگشت به پنل اصلی']]
     await update.message.reply_text('ارسال شود یا زمان‌بندی شود؟', reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
     return WAITING_FOR_SCHEDULE
@@ -123,7 +94,7 @@ async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('ارسال شد.', reply_markup=ReplyKeyboardRemove())
         return WAITING_FOR_MEDIA
     elif text == 'ارسال در آینده':
-        await update.message.reply_text('زمان ارسال را به دقیقه وارد کنید:')
+        await update.message.reply_text('زمان ارسال را به دقیقه وارد کن:')
         return 100
     elif text == 'برگشت به پنل اصلی':
         return await start(update, context)
@@ -138,21 +109,14 @@ async def handle_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(send_to_channel_job, when=timedelta(minutes=minutes), data=context.user_data.copy())
         await update.message.reply_text('زمان‌بندی شد.', reply_markup=ReplyKeyboardRemove())
         return WAITING_FOR_MEDIA
-    except:
-        await update.message.reply_text('عدد وارد کنید.')
+    except ValueError:
+        await update.message.reply_text('عدد معتبر وارد کن.')
         return 100
 
 async def send_to_channel(context):
     data = context.user_data
-    file_id = data['video']
-    now = datetime.now().isoformat()
-
-    # ذخیره فایل
-    if file_id not in data_store["files"]:
-        data_store["files"][file_id] = {"requests": 0, "added": now}
-        data_store["file_count"] += 1
-    save_data(data_store)
-
+    video_id = data['video']
+    record_file_request(video_id)
     await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
 
 async def send_to_channel_job(context: CallbackContext):
@@ -169,7 +133,7 @@ async def check_membership(user_id: int, bot) -> list:
 async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
-        await update.message.reply_text('برای استفاده از ربات روی لینک "مشاهده" در پست کلیک کنید.')
+        await update.message.reply_text('روی دکمه‌ی مشاهده در پست بزن.')
         return
     file_id = args[0]
     not_joined = await check_membership(update.effective_user.id, context.bot)
@@ -179,8 +143,7 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("زاپاس تف", url=f'https://t.me/{CHANNEL_USERNAME_SECONDARY[1:]}')],
             [InlineKeyboardButton("عضو شدم", callback_data=f"check_{file_id}")]
         ]
-        markup = InlineKeyboardMarkup(buttons)
-        await update.message.reply_text('برای دریافت فایل، در یکی از کانال‌ها عضو شوید:', reply_markup=markup)
+        await update.message.reply_text('لطفاً عضو شو بعد روی دکمه "عضو شدم" بزن.', reply_markup=InlineKeyboardMarkup(buttons))
     else:
         await send_and_delete(file_id, update, context)
 
@@ -192,7 +155,7 @@ async def handle_check_membership(update: Update, context: ContextTypes.DEFAULT_
     not_joined = await check_membership(user_id, context.bot)
     if not_joined:
         await query.message.delete()
-        await context.bot.send_message(chat_id=user_id, text='شما هنوز در یکی از کانال‌ها عضو نشدید.')
+        await context.bot.send_message(chat_id=user_id, text='عضویت کامل نشده.')
     else:
         await query.message.delete()
         await send_and_delete(file_id, query, context)
@@ -200,23 +163,9 @@ async def handle_check_membership(update: Update, context: ContextTypes.DEFAULT_
 async def send_and_delete(file_id: str, update: Update | CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message = await context.bot.send_video(chat_id=user_id, video=file_id)
-    await context.bot.send_message(chat_id=user_id, text='این پیام پس از ۳۰ ثانیه حذف می‌شود.')
-
-    # ثبت درخواست فایل
-    file_id = file_id.strip()
-    now = datetime.now().isoformat()
-    if file_id in data_store["files"]:
-        data_store["files"][file_id]["requests"] += 1
-    else:
-        data_store["files"][file_id] = {"requests": 1, "added": now}
-        data_store["file_count"] += 1
-
-    user_id_str = str(user_id)
-    if user_id_str not in data_store["user_stats"]:
-        data_store["user_stats"][user_id_str] = []
-    data_store["user_stats"][user_id_str].append(now)
-    save_data(data_store)
-
+    await context.bot.send_message(chat_id=user_id, text='این پیام تا ۳۰ ثانیه بعد حذف می‌شود.')
+    add_user(user_id)
+    record_file_request(file_id)
     context.job_queue.run_once(delete_msg, 30, data={'chat_id': user_id, 'msg_id': message.message_id})
 
 async def delete_msg(context: CallbackContext):
@@ -224,7 +173,9 @@ async def delete_msg(context: CallbackContext):
     await context.bot.delete_message(chat_id=data['chat_id'], message_id=data['msg_id'])
 
 def main():
+    init_db()
     app = Application.builder().token(TOKEN).build()
+
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT, handle_panel_choice)],
         states={
