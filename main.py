@@ -34,14 +34,12 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     add_user(user_id)
 
     if not args:
-        # اگه بدون آرگومان بود
         if user_id in ADMINS:
-            return await start(update, context)  # نمایش پنل برای ادمین
+            return await start(update, context)
         else:
             await update.message.reply_text('به ربات خوش آمدید.')
             return
 
-    # اگه با آرگومان فایل بود
     file_id = args[0]
     not_joined = await check_membership(user_id, context.bot)
     if not_joined:
@@ -182,6 +180,7 @@ async def delete_msg(context: CallbackContext):
 def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
+    
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT, handle_panel_choice)],
         states={
@@ -198,11 +197,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_check_membership, pattern=r"^check_"))
     app.add_handler(conv)
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        webhook_url="https://kkkkk-mkfn.onrender.com/webhook"
-    )
+    # اجرای حالت polling
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
