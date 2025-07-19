@@ -1,204 +1,219 @@
-import os
-import logging
-from telegram import Update, CallbackQuery, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters,
-    ContextTypes, ConversationHandler, CallbackContext, CallbackQueryHandler
-)
-from datetime import datetime, timedelta
-from telegram.constants import ChatMemberStatus
-from database import init_db, add_user, increase_file_count, get_file_count, increase_file_request, file_exists
+from flask import Flask, request
+import requests
+import threading
+import time
+from config import BOT_TOKEN, WEBHOOK_URL, ADMIN_IDS, CHANNEL_TAG, PING_INTERVAL
+from database import save_file, get_file, get_channels, add_channel, remove_channel
+from utils import gen_code
 
-TOKEN = '7413532622:AAFfd_ctt4Xb055CqQxct64anIUTHhagW4M'
-CHANNEL_USERNAME = '@hottof'
-CHANNEL_NAME = 'تُفِ داغ'
-CHANNEL_USERNAME_SECONDARY = '@tofhot'
-CHANNEL_NAME_SECONDARY = 'زاپاس تف'
-ADMINS = [6387942633]
+app = Flask(__name__)
+URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+users = {}
+pinging = True
+active_users = set()
 
-WAITING_FOR_MEDIA, WAITING_FOR_CAPTION, WAITING_FOR_ACTION, WAITING_FOR_SCHEDULE = range(4)
+# ------------------ ابزار ارسال ------------------
+def send(method, data):
+    response = requests.post(f"{URL}/{method}", json=data).json()
+    print(f"Response from {method}: {response}")
+    return response
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def delete(chat_id, message_id):
+    send("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [['۱ سوپر', '۲ پست', '۳ آمار']]
-    await update.message.reply_text('به پنل خوش آمدید.', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-    return WAITING_FOR_MEDIA
-
-async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-
-    from database import add_user
-    add_user(user_id)
-
-    if not args:
-        if user_id in ADMINS:
-            return await start(update, context)
-        else:
-            await update.message.reply_text('به ربات خوش آمدید.')
-            return
-
-    file_id = args[0]
-    not_joined = await check_membership(user_id, context.bot)
-    if not_joined:
-        buttons = [
-            [InlineKeyboardButton("تُفِ داغ", url=f'https://t.me/{CHANNEL_USERNAME[1:]}')],
-            [InlineKeyboardButton("زاپاس تف", url=f'https://t.me/{CHANNEL_USERNAME_SECONDARY[1:]}')],
-            [InlineKeyboardButton("عضو شدم", callback_data=f"check_{file_id}")]
-        ]
-        markup = InlineKeyboardMarkup(buttons)
-        await update.message.reply_text('برای دریافت فایل، در یکی از کانال‌ها عضو شوید:', reply_markup=markup)
-    else:
-        await send_and_delete(file_id, update, context)
-
-async def handle_panel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from database import get_active_user_counts
-    text = update.message.text
-    if text == '۱ سوپر':
-        await update.message.reply_text('یک ویدیو ارسال کن.')
-        return WAITING_FOR_MEDIA
-    elif text == '۲ پست':
-        await update.message.reply_text('یک پیام فوروارد کن.')
-        return WAITING_FOR_CAPTION
-    elif text == '۳ آمار':
-        now = datetime.now()
-        stats = get_active_user_counts()
-        await update.message.reply_text(
-            f'🤖 آمار شما در ساعت {now.strftime("%H:%M:%S")} و تاریخ {now.strftime("%Y/%m/%d")} به این صورت می‌باشد\n\n'
-            f'👥 تعداد اعضا : {stats["total"]}\n'
-            f'🕒 کاربران ساعت گذشته : {stats["hour"]}\n'
-            f'☪️ کاربران ۲۴ ساعت گذشته : {stats["day"]}\n'
-            f'7️⃣ کاربران هفته گذشته : {stats["week"]}\n'
-            f'🌛 کاربران ماه گذشته : {stats["month"]}\n'
-            f'🗂 تعداد فایل‌ها : {get_file_count()}'
-        )
-        return WAITING_FOR_MEDIA
-    return WAITING_FOR_MEDIA
-
-async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.video:
-        await update.message.reply_text('فقط ویدیو قابل قبول است.')
-        return WAITING_FOR_MEDIA
-    context.user_data['video'] = update.message.video.file_id
-    await update.message.reply_text('حالا لطفاً کاور (عکس) را ارسال کنید.')
-    return WAITING_FOR_CAPTION
-
-async def handle_cover(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text('فقط تصویر قابل قبول است.')
-        return WAITING_FOR_CAPTION
-    context.user_data['cover'] = update.message.photo[-1].file_id
-    await update.message.reply_text('کپشن را وارد کنید:')
-    return WAITING_FOR_ACTION
-
-async def handle_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['caption'] = update.message.text
-    file_id = context.user_data['video']
-    cover_id = context.user_data['cover']
-    caption = context.user_data['caption']
-    preview_caption = f'{caption}\n\n@hottof | تُفِ داغ'
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('مشاهده', url=f'https://t.me/{context.bot.username}?start={file_id}')]])
-    await update.message.reply_photo(cover_id, caption=preview_caption, reply_markup=keyboard)
-    context.user_data['preview_caption'] = preview_caption
-    context.user_data['inline_keyboard'] = keyboard
-    reply_keyboard = [['ارسال در کانال حالا', 'ارسال در آینده'], ['لغو', 'برگشت به پنل اصلی']]
-    await update.message.reply_text('ارسال شود یا زمان‌بندی شود؟', reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
-    return WAITING_FOR_SCHEDULE
-
-async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == 'ارسال در کانال حالا':
-        await send_to_channel(context)
-        await update.message.reply_text('ارسال شد.', reply_markup=ReplyKeyboardRemove())
-        return WAITING_FOR_MEDIA
-    elif text == 'ارسال در آینده':
-        await update.message.reply_text('زمان ارسال را به دقیقه وارد کنید:')
-        return 100
-    elif text == 'برگشت به پنل اصلی':
-        return await start(update, context)
-    elif text == 'لغو':
-        await update.message.reply_text('لغو شد.', reply_markup=ReplyKeyboardRemove())
-        return WAITING_FOR_MEDIA
-    return WAITING_FOR_SCHEDULE
-
-async def handle_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ------------------ بررسی عضویت کانال ------------------
+def is_joined(user_id, channel_link):
     try:
-        minutes = int(update.message.text)
-        context.job_queue.run_once(send_to_channel_job, when=timedelta(minutes=minutes), data=context.user_data.copy())
-        await update.message.reply_text('زمان‌بندی شد.', reply_markup=ReplyKeyboardRemove())
-        return WAITING_FOR_MEDIA
+        username = channel_link.split("/")[-1]
+        r = requests.get(f"{URL}/getChatMember", params={
+            "chat_id": f"@{username}",
+            "user_id": user_id
+        }).json()
+        return r.get("result", {}).get("status") in ["member", "administrator", "creator"]
     except:
-        await update.message.reply_text('عدد وارد کنید.')
-        return 100
+        return False
 
-async def send_to_channel(context):
-    from database import add_file_if_not_exists
-    data = context.user_data
-    file_id = data['video']
-    add_file_if_not_exists(file_id)
-    await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=data['cover'], caption=data['preview_caption'], reply_markup=data['inline_keyboard'])
+def get_user_unjoined_channels(user_id):
+    return [ch for ch in get_channels() if not is_joined(user_id, ch)]
 
-async def send_to_channel_job(context: CallbackContext):
-    await send_to_channel(context)
+def make_force_join_markup(channels, code):
+    buttons = [[{"text": f"📢 کانال {i+1}", "url": ch}] for i, ch in enumerate(channels)]
+    buttons.append([{"text": "✅ عضو شدم", "callback_data": f"checksub_{code}"}])
+    return {"inline_keyboard": buttons}
 
-async def check_membership(user_id: int, bot) -> list:
-    not_joined = []
-    for ch in [CHANNEL_USERNAME, CHANNEL_USERNAME_SECONDARY]:
-        member = await bot.get_chat_member(chat_id=ch, user_id=user_id)
-        if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-            not_joined.append(ch)
-    return not_joined
+# ------------------ پینگ ------------------
+def ping():
+    while pinging:
+        try:
+            requests.get(WEBHOOK_URL)
+        except:
+            pass
+        time.sleep(PING_INTERVAL)
 
-async def handle_check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    file_id = query.data.split("_", 1)[1]
-    not_joined = await check_membership(user_id, context.bot)
-    if not_joined:
-        await query.message.delete()
-        await context.bot.send_message(chat_id=user_id, text='شما هنوز در یکی از کانال‌ها عضو نشدید.')
-    else:
-        await query.message.delete()
-        await send_and_delete(file_id, query, context)
+threading.Thread(target=ping, daemon=True).start()
 
-async def send_and_delete(file_id: str, update: Update | CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
-    from database import increase_file_request, add_user
-    user_id = update.effective_user.id
-    add_user(user_id)
-    increase_file_request(file_id)
-    message = await context.bot.send_video(chat_id=user_id, video=file_id)
-    await context.bot.send_message(chat_id=user_id, text='این پیام پس از ۳۰ ثانیه حذف می‌شود.')
-    context.job_queue.run_once(delete_msg, 30, data={'chat_id': user_id, 'msg_id': message.message_id})
+# ------------------ بررسی خروج کاربران ------------------
+def monitor_subscriptions():
+    while True:
+        for uid in list(active_users):
+            unjoined = get_user_unjoined_channels(uid)
+            if unjoined:
+                send("sendMessage", {
+                    "chat_id": uid,
+                    "text": "🚫 شما از کانال خارج شدی. لطفاً دوباره عضو شو.",
+                    "reply_markup": make_force_join_markup(unjoined, "dummy")
+                })
+                active_users.remove(uid)
+        time.sleep(1)
 
-async def delete_msg(context: CallbackContext):
-    data = context.job.data
-    await context.bot.delete_message(chat_id=data['chat_id'], message_id=data['msg_id'])
+threading.Thread(target=monitor_subscriptions, daemon=True).start()
 
-def main():
-    init_db()
-    app = Application.builder().token(TOKEN).build()
-    
-    conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT, handle_panel_choice)],
-        states={
-            WAITING_FOR_MEDIA: [MessageHandler(filters.VIDEO, handle_media)],
-            WAITING_FOR_CAPTION: [MessageHandler(filters.PHOTO, handle_cover)],
-            WAITING_FOR_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_caption)],
-            WAITING_FOR_SCHEDULE: [MessageHandler(filters.TEXT, handle_schedule)],
-            100: [MessageHandler(filters.TEXT, handle_timer)],
-        },
-        fallbacks=[CommandHandler('cancel', start)]
-    )
+# ------------------ روت ها ------------------
+@app.route("/")
+def index():
+    return "Bot is running!"
 
-    app.add_handler(CommandHandler("start", handle_start_command))
-    app.add_handler(CallbackQueryHandler(handle_check_membership, pattern=r"^check_"))
-    app.add_handler(conv)
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = request.get_json()
 
-    # اجرای حالت polling
-    app.run_polling()
+    if "message" in update:
+        msg = update["message"]
+        uid = msg["from"]["id"]
+        cid = msg["chat"]["id"]
+        mid = msg["message_id"]
+        text = msg.get("text", "")
+        state = users.get(uid, {})
 
-if __name__ == '__main__':
-    main()
+        # ---------- /start با کد ----------
+        if text.startswith("/start "):
+            code = text.split("/start ")[1]
+            file_id = get_file(code)
+            if file_id:
+                unjoined = get_user_unjoined_channels(uid)
+                if unjoined:
+                    send("sendMessage", {
+                        "chat_id": cid,
+                        "text": "⛔️ برای دریافت فایل، ابتدا در کانال‌های زیر عضو شو:",
+                        "reply_markup": make_force_join_markup(unjoined, code)
+                    })
+                    return "ok"
+                sent = send("sendVideo", {"chat_id": cid, "video": file_id})
+                if "result" in sent:
+                    mid = sent["result"]["message_id"]
+                    send("sendMessage", {"chat_id": cid, "text": "⚠️این محتوا تا ۲۰ ثانیه دیگر پاک میشود "})
+                    threading.Timer(20, delete, args=(cid, mid)).start()
+                active_users.add(uid)
+            return "ok"
+
+        # ---------- /start بدون کد ----------
+        if text == "/start":
+            send("sendMessage", {"chat_id": cid, "text": "سلام خوش اومدی عزیزم واسه دریافت فایل مد نظرت از کانال @hottof روی دکمه مشاهده بزن ♥️"})
+
+        # ---------- پنل مدیریت ----------
+        elif text == "/panel" and uid in ADMIN_IDS:
+            kb = {"keyboard": [[{"text": "🔞سوپر"}], [{"text": "🖼پست"}], [{"text": "🔐 عضویت اجباری"}]], "resize_keyboard": True}
+            send("sendMessage", {"chat_id": cid, "text": "سلام آقا مدیر 🔱", "reply_markup": kb})
+
+        elif text == "🔐 عضویت اجباری" and uid in ADMIN_IDS:
+            channels = get_channels()
+            lines = ["📋 لیست کانال‌های عضویت اجباری:"] + [f"🔗 {ch}" for ch in channels] if channels else ["❌ هیچ کانالی ثبت نشده"]
+            lines.append("\n➕ برای اضافه کردن: `+https://t.me/...`\n➖ برای حذف: `-https://t.me/...`")
+            send("sendMessage", {"chat_id": cid, "text": "\n".join(lines), "parse_mode": "Markdown"})
+
+        elif uid in ADMIN_IDS and text.startswith("+https://t.me/"):
+            add_channel(text[1:])
+            send("sendMessage", {"chat_id": cid, "text": "✅ کانال اضافه شد."})
+
+        elif uid in ADMIN_IDS and text.startswith("-https://t.me/"):
+            remove_channel(text[1:])
+            send("sendMessage", {"chat_id": cid, "text": "🗑 کانال حذف شد."})
+
+        # ---------- مراحل پست ----------
+        elif text == "🔞سوپر" and uid in ADMIN_IDS:
+            users[uid] = {"step": "awaiting_video"}
+            send("sendMessage", {"chat_id": cid, "text": "ای جان یه سوپر ناب برام بفرست 🍌"})
+
+        elif text == "🖼پست" and uid in ADMIN_IDS:
+            users[uid] = {"step": "awaiting_forward"}
+            send("sendMessage", {"chat_id": cid, "text": "محتوا رو برا فوروارد کن یادت نره تگ بزنی روش ✅️"})
+
+        elif state.get("step") == "awaiting_video" and "video" in msg:
+            users[uid]["step"] = "awaiting_caption"
+            users[uid]["file_id"] = msg["video"]["file_id"]
+            send("sendMessage", {"chat_id": cid, "text": "منتظر کپشن خوشکلت هستم 💫"})
+
+        elif state.get("step") == "awaiting_caption":
+            users[uid]["step"] = "awaiting_cover"
+            users[uid]["caption"] = text
+            send("sendMessage", {"chat_id": cid, "text": "یه عکس برای پیش نمایش بهم بده 📸"})
+
+        elif state.get("step") == "awaiting_cover" and "photo" in msg:
+            file_id = users[uid]["file_id"]
+            caption = users[uid]["caption"]
+            cover_id = msg["photo"][-1]["file_id"]
+            code = gen_code()
+            save_file(file_id, code)
+            link = f"<a href='https://t.me/HotTofBot?start={code}'>مشاهده</a>\n\n{CHANNEL_TAG}"
+            send("sendPhoto", {
+                "chat_id": cid,
+                "photo": cover_id,
+                "caption": caption + "\n\n" + link,
+                "parse_mode": "HTML"
+            })
+            users.pop(uid)
+            send("sendMessage", {
+                "chat_id": cid,
+                "text": "درخواست شما تایید شد✅️",
+                "reply_markup": {"keyboard": [[{"text": "🔞سوپر"}], [{"text": "🖼پست"}], [{"text": "🔐 عضویت اجباری"}]], "resize_keyboard": True}
+            })
+
+        elif state.get("step") == "awaiting_forward" and ("video" in msg or "photo" in msg):
+            users[uid]["step"] = "awaiting_post_caption"
+            users[uid]["post_msg"] = msg
+            send("sendMessage", {"chat_id": cid, "text": "یه کپشن خوشکل بزن حال کنم 😁"})
+
+        elif state.get("step") == "awaiting_post_caption":
+            post_msg = users[uid]["post_msg"]
+            caption = text + "\n\n" + CHANNEL_TAG
+            if "video" in post_msg:
+                fid = post_msg["video"]["file_id"]
+                send("sendVideo", {"chat_id": cid, "video": fid, "caption": caption})
+            else:
+                fid = post_msg["photo"][-1]["file_id"]
+                send("sendPhoto", {"chat_id": cid, "photo": fid, "caption": caption})
+            users[uid]["step"] = "awaiting_forward"
+            send("sendMessage", {"chat_id": cid, "text": "بفرما اینم درخواستت ✅️ آماده ام پست بعدی رو بفرستی ارباب🔥"})
+
+    elif "callback_query" in update:
+        cq = update["callback_query"]
+        uid = cq["from"]["id"]
+        cid = cq["message"]["chat"]["id"]
+        mid = cq["message"]["message_id"]
+        data = cq["data"]
+
+        if data.startswith("checksub_"):
+            code = data.split("_")[1]
+            unjoined = get_user_unjoined_channels(uid)
+            if not unjoined:
+                send("deleteMessage", {"chat_id": cid, "message_id": mid})
+                if code != "dummy":
+                    file_id = get_file(code)
+                    if file_id:
+                        send("sendVideo", {"chat_id": cid, "video": file_id})
+                        active_users.add(uid)
+                else:
+                    send("sendMessage", {"chat_id": cid, "text": "🙏 ممنون که هوامونو داری ❤️"})
+            else:
+                send("answerCallbackQuery", {
+                    "callback_query_id": cq["id"],
+                    "text": "❌ هنوز عضو همه کانال‌ها نیستی!",
+                    "show_alert": True
+                })
+
+    return "ok"
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
