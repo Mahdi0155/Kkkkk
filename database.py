@@ -1,105 +1,65 @@
 import sqlite3
-from datetime import datetime, timedelta
 
-DB_PATH = "bot.db"
+# اتصال به دیتابیس و ساخت جدول‌ها در صورت نبود
+conn = sqlite3.connect("videos.db", check_same_thread=False)
+cur = conn.cursor()
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+# جدول ویدیوها (برای لینک‌های تولید شده و فایل‌ها)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS videos (
+    code TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL
+)
+""")
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
+# جدول لینک‌های عضویت اجباری
+cur.execute("""
+CREATE TABLE IF NOT EXISTS forced_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    link TEXT UNIQUE NOT NULL
+)
+""")
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS stats (
-        user_id INTEGER,
-        timestamp TEXT
-    )
-    """)
+conn.commit()
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS files (
-        file_id TEXT PRIMARY KEY,
-        requests INTEGER DEFAULT 0,
-        added TEXT
-    )
-    """)
-
+# ذخیره فایل و کد اختصاصی
+def save_file(file_id, code):
+    print(f"Saving file_id: {file_id} with code: {code}")
+    cur.execute("INSERT OR REPLACE INTO videos (code, file_id) VALUES (?, ?)", (code, file_id))
     conn.commit()
-    conn.close()
 
-def add_user(user_id: int):
-    now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    cursor.execute("INSERT INTO stats (user_id, timestamp) VALUES (?, ?)", (user_id, now))
-    conn.commit()
-    conn.close()
-
-def increase_file_count(file_id: str):
-    now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
-    if cursor.fetchone():
-        cursor.execute("UPDATE files SET requests = requests + 1 WHERE file_id = ?", (file_id,))
+# دریافت فایل با کد اختصاصی
+def get_file(code):
+    print(f"Getting file for code: {code}")
+    cur.execute("SELECT file_id FROM videos WHERE code = ?", (code,))
+    row = cur.fetchone()
+    if row:
+        print(f"Found file_id: {row[0]} for code: {code}")
     else:
-        cursor.execute("INSERT INTO files (file_id, requests, added) VALUES (?, 1, ?)", (file_id, now))
-    conn.commit()
-    conn.close()
+        print(f"No file found for code: {code}")
+    return row[0] if row else None
 
-def get_file_count(file_id: str) -> int:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT requests FROM files WHERE file_id = ?", (file_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
+# افزودن لینک عضویت اجباری
+def add_forced_channel(link):
+    try:
+        cur.execute("INSERT OR IGNORE INTO forced_channels (link) VALUES (?)", (link,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print("Error adding channel:", e)
+        return False
 
-def increase_file_request(user_id: int):
-    now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO stats (user_id, timestamp) VALUES (?, ?)", (user_id, now))
-    conn.commit()
-    conn.close()
+# حذف لینک عضویت اجباری
+def remove_forced_channel(link):
+    try:
+        cur.execute("DELETE FROM forced_channels WHERE link = ?", (link,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print("Error removing channel:", e)
+        return False
 
-def file_exists(file_id: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM files WHERE file_id = ?", (file_id,))
-    exists = cursor.fetchone() is not None
-    conn.close()
-    return exists
-
-def get_stats():
-    now = datetime.now()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT user_id FROM stats")
-    all_users = [row[0] for row in cursor.fetchall()]
-
-    cursor.execute("SELECT user_id, timestamp FROM stats")
-    records = cursor.fetchall()
-
-    def count_in_period(seconds):
-        return len({u for u, t in records if (now - datetime.fromisoformat(t)).total_seconds() <= seconds})
-
-    stats = {
-        "total_users": len(all_users),
-        "hour": count_in_period(3600),
-        "day": count_in_period(86400),
-        "week": count_in_period(604800),
-        "month": count_in_period(2592000)
-    }
-
-    cursor.execute("SELECT COUNT(*) FROM files")
-    stats["file_count"] = cursor.fetchone()[0]
-
-    conn.close()
-    return stats
+# دریافت همه لینک‌های عضویت اجباری
+def get_forced_channels():
+    cur.execute("SELECT link FROM forced_channels")
+    return [row[0] for row in cur.fetchall()]
